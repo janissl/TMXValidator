@@ -11,14 +11,17 @@
  *******************************************************************************/ 
 package com.maxprograms.tmxvalidation;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
+import java.io.*;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Properties;
+import java.util.stream.Stream;
 
 import javax.xml.parsers.ParserConfigurationException;
 
@@ -28,7 +31,6 @@ import com.maxprograms.xml.CustomErrorHandler;
 import com.maxprograms.xml.SAXBuilder;
 
 public class TMXValidator {
-
 	private static final Logger LOGGER = System.getLogger(TMXValidator.class.getName());
 	
 	private SAXBuilder builder;
@@ -84,6 +86,15 @@ public class TMXValidator {
 	private static void writeString(FileOutputStream out, String string) throws IOException {
 		out.write(string.getBytes(StandardCharsets.UTF_8));
 	}
+
+	private static void validateSingleFile(TMXValidator validator, File tmxFile) {
+		try {
+			validator.validate(tmxFile);
+			LOGGER.log(Level.INFO, String.format("'%s' is valid TMX", tmxFile.toString()));
+		} catch (IOException | SAXException | ParserConfigurationException e) {
+			LOGGER.log(Level.ERROR, e.getMessage());
+		}
+	}
 	
 	public static void main(String[] args) {
 		String[] commandLine = fixPath(args);
@@ -98,33 +109,81 @@ public class TMXValidator {
 				help();
 				return;
 			}
-			if (arg.equals("-tmx") && (i + 1) < commandLine.length) {
-				tmx = commandLine[i + 1];
+			if (System.getProperty("file.separator").equals("/")) {
+				if (arg.equals("-tmx") && (i + 1) < commandLine.length) {
+					tmx = commandLine[i + 1];
+				}
+			}
+			else {
+//				TODO: on Windows, take a path a file containing list of TMX files instead, e.g. tmx.lst
+				if (arg.equals("-tmx")) {
+					Properties prop = new Properties();
+
+					try (InputStream input = new FileInputStream("tmx.properties")) {
+						prop.load(new InputStreamReader(input, StandardCharsets.UTF_8));
+					}
+					catch (IOException e) {
+						LOGGER.log(Level.ERROR, e.getMessage());
+						return;
+					}
+
+					tmx = prop.getProperty("tmx", "");
+				}
 			}
 		}
 		if (tmx.isEmpty()) {
 			help();
 			return;
 		}
-		try {
-			TMXValidator validator = new TMXValidator();
-			validator.validate(new File(tmx));
-			LOGGER.log(Level.INFO, "Selected file is valid TMX");
-		} catch (IOException | SAXException | ParserConfigurationException e) {
-			LOGGER.log(Level.ERROR, e.getMessage());
+
+		TMXValidator validator = new TMXValidator();
+		Path tmxPath = Paths.get(tmx);
+
+		if (Files.isRegularFile(tmxPath)) {
+			validateSingleFile(validator, tmxPath.toFile());
+		}
+		else if (Files.isDirectory(tmxPath)) {
+			try (Stream<Path> stream = Files.list(tmxPath)) {
+				stream.filter(path -> Files.isRegularFile(path) && path.toString().endsWith(".tmx"))
+						.forEach(path -> validateSingleFile(validator, path.toFile()));
+			} catch (IOException e) {
+				LOGGER.log(Level.ERROR, e.getMessage());
+			}
 		}
 	}
 	
 	private static void help() {
-		String launcher = "   tmxvalidator.sh ";
+		String usageIntro = "Usage:\n\n   java -cp \"jars/*\" ";
+
 		if (System.getProperty("file.separator").equals("\\")) {
-			launcher = "   tmxvalidator.bat ";
+			usageIntro += "-D\"java.util.logging.config.file=conf/logging.properties\"";
 		}
-		String help = "Usage:\n\n" + launcher + "[-help] [-version] -tmx tmxFile\n\n"
+		else {
+			usageIntro += "-Djava.util.logging.config.file=conf/logging.properties";
+		}
+
+		usageIntro += " com.maxprograms.tmxvalidation.TMXValidator [-help] [-version] -tmx";
+
+		if (System.getProperty("file.separator").equals("\\")) {
+			usageIntro += "\n\n";
+		}
+		else {
+			usageIntro += " tmxFile\n\n";
+		}
+
+		String help = usageIntro
 				+ "Where:\n\n"
 				+ "   -help:       (optional) Display this help information and exit\n"
 				+ "   -version:    (optional) Display version & build information and exit\n"
-				+ "   -tmx:        TMX file to validate\n\n";
+				+ "   -tmx:        validate single TMX file or entire directory of TMX files\n";
+
+		if (System.getProperty("file.separator").equals("\\")) {
+			help += "                Note: Specify file or directory path in tmx.properties using 'tmx' as a property name\n\n";
+		}
+		else {
+			help += "   tmxFile:     path of TMX file or directory of TMX files\n\n";
+		}
+
 		System.out.println(help);
 	}
 
